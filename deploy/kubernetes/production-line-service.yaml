@@ -1,0 +1,56 @@
+# production-line-service — Deployment + Service + HPA.
+# Config arrives via environment variables (12-Factor III); secrets are referenced, never embedded.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: production-line-service
+  namespace: manufacturing
+  labels: { app: production-line-service, app.kubernetes.io/part-of: open-manufacturing }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: production-line-service } }
+  template:
+    metadata:
+      labels: { app: production-line-service }
+    spec:
+      containers:
+        - name: production-line-service
+          image: quay.io/open-industries/production-line-service:latest  # replaced by the promoted release digest
+          ports: [{ containerPort: 8081, name: http }]
+          env:
+            - { name: HTTP_PORT, value: "8081" }
+            - { name: LOG_LEVEL, value: "INFO" }
+            - name: DB_URL
+              valueFrom: { secretKeyRef: { name: production-line-service-db, key: url, optional: true } }
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /q/health/live, port: http }
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet: { path: /q/health/ready, port: http }
+            initialDelaySeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: production-line-service
+  namespace: manufacturing
+  labels: { app: production-line-service }
+spec:
+  selector: { app: production-line-service }
+  ports: [{ name: http, port: 8081, targetPort: http }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: production-line-service
+  namespace: manufacturing
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: production-line-service }
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
